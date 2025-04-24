@@ -1,25 +1,12 @@
 import os 
 from setuptools import setup, find_packages
-from setuptools.command.develop import develop
-from setuptools.command.install import install
-
 
 cwd = os.path.dirname(os.path.abspath(__file__))
 
+# Read requirements but filter out any lines starting with --
 with open('requirements.txt') as f:
-    reqs = f.read().splitlines()
-class PostInstallCommand(install):
-    """Post-installation for installation mode."""
-    def run(self):
-        install.run(self)
-        os.system('python -m unidic download')
-
-
-class PostDevelopCommand(develop):
-    """Post-installation for development mode."""
-    def run(self):
-        develop.run(self)
-        os.system('python -m unidic download')
+    reqs = [line.strip() for line in f.readlines() 
+            if line.strip() and not line.startswith('--')]
 
 setup(
     name='melotts',
@@ -28,7 +15,7 @@ setup(
     include_package_data=True,
     install_requires=reqs,
     package_data={
-        '': ['*.txt', 'cmudict_*'],
+        '': ['*.txt', 'cmudict_*'],  # Keep CMU dictionary files for English
     },
     entry_points={
         "console_scripts": [

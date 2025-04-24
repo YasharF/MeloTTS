@@ -1,14 +1,10 @@
 import os
 import re
-import json
 import torch
-import librosa
 import soundfile
-import torchaudio
 import numpy as np
 import torch.nn as nn
 from tqdm import tqdm
-import torch
 
 from . import utils
 from . import commons
@@ -19,7 +15,7 @@ from .download_utils import load_or_download_config, load_or_download_model
 
 class TTS(nn.Module):
     def __init__(self, 
-                language,
+                language='EN',
                 device='auto',
                 use_hf=True,
                 config_path=None,
@@ -32,7 +28,6 @@ class TTS(nn.Module):
         if 'cuda' in device:
             assert torch.cuda.is_available()
 
-        # config_path = 
         hps = load_or_download_config(language, use_hf=use_hf, config_path=config_path)
 
         num_languages = hps.num_languages
@@ -59,8 +54,7 @@ class TTS(nn.Module):
         checkpoint_dict = load_or_download_model(language, device, use_hf=use_hf, ckpt_path=ckpt_path)
         self.model.load_state_dict(checkpoint_dict['model'], strict=True)
         
-        language = language.split('_')[0]
-        self.language = 'ZH_MIX_EN' if language == 'ZH' else language # we support a ZH_MIX_EN model
+        self.language = 'EN'
 
     @staticmethod
     def audio_numpy_concat(segment_data_list, sr, speed=1.):
@@ -80,10 +74,12 @@ class TTS(nn.Module):
             print(" > ===========================")
         return texts
 
-    def tts_to_file(self, text, speaker_id, output_path=None, sdp_ratio=0.2, noise_scale=0.6, noise_scale_w=0.8, speed=1.0, pbar=None, format=None, position=None, quiet=False,):
-        language = self.language
-        texts = self.split_sentences_into_pieces(text, language, quiet)
+    def tts_to_file(self, text, speaker_id, output_path=None, sdp_ratio=0.2, 
+                    noise_scale=0.6, noise_scale_w=0.8, speed=1.0, pbar=None, 
+                    format=None, position=None, quiet=False):
+        texts = self.split_sentences_into_pieces(text, self.language, quiet)
         audio_list = []
+        
         if pbar:
             tx = pbar(texts)
         else:
@@ -93,11 +89,16 @@ class TTS(nn.Module):
                 tx = texts
             else:
                 tx = tqdm(texts)
+                
         for t in tx:
-            if language in ['EN', 'ZH_MIX_EN']:
-                t = re.sub(r'([a-z])([A-Z])', r'\1 \2', t)
+            # Handle camelCase splitting for better pronunciation
+            t = re.sub(r'([a-z])([A-Z])', r'\1 \2', t)
+            
             device = self.device
-            bert, ja_bert, phones, tones, lang_ids = utils.get_text_for_tts_infer(t, language, self.hps, device, self.symbol_to_id)
+            bert, ja_bert, phones, tones, lang_ids = utils.get_text_for_tts_infer(
+                t, self.language, self.hps, device, self.symbol_to_id
+            )
+            
             with torch.no_grad():
                 x_tst = phones.to(device).unsqueeze(0)
                 tones = tones.to(device).unsqueeze(0)
@@ -105,24 +106,27 @@ class TTS(nn.Module):
                 bert = bert.to(device).unsqueeze(0)
                 ja_bert = ja_bert.to(device).unsqueeze(0)
                 x_tst_lengths = torch.LongTensor([phones.size(0)]).to(device)
-                del phones
                 speakers = torch.LongTensor([speaker_id]).to(device)
+                
                 audio = self.model.infer(
-                        x_tst,
-                        x_tst_lengths,
-                        speakers,
-                        tones,
-                        lang_ids,
-                        bert,
-                        ja_bert,
-                        sdp_ratio=sdp_ratio,
-                        noise_scale=noise_scale,
-                        noise_scale_w=noise_scale_w,
-                        length_scale=1. / speed,
-                    )[0][0, 0].data.cpu().float().numpy()
+                    x_tst,
+                    x_tst_lengths,
+                    speakers,
+                    tones,
+                    lang_ids,
+                    bert,
+                    ja_bert,
+                    sdp_ratio=sdp_ratio,
+                    noise_scale=noise_scale,
+                    noise_scale_w=noise_scale_w,
+                    length_scale=1. / speed,
+                )[0][0, 0].data.cpu().float().numpy()
+                
+                # Clean up tensors to free memory
                 del x_tst, tones, lang_ids, bert, ja_bert, x_tst_lengths, speakers
-                # 
+                
             audio_list.append(utils.normalize_loudness(audio))
+            
         torch.cuda.empty_cache()
         audio = self.audio_numpy_concat(audio_list, sr=self.hps.data.sampling_rate, speed=speed)
 

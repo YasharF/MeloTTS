@@ -23,18 +23,6 @@ def normalize_loudness(audio):
         return audio
     scale_factor = (1 - 1e-6) / max_val
     normalized_audio = audio * scale_factor
-
-    if False:
-        print(f'--- normalize ---')
-        print(f"Before normalization:")
-        print(f"  Min value: {np.min(audio)}")
-        print(f"  Max value: {np.max(audio)}")
-        print(f"  Length: {len(audio)}")
-        print(f"After normalization:")
-        print(f"  Min value: {np.min(normalized_audio)}")
-        print(f"  Max value: {np.max(normalized_audio)}")
-        print(f"  Length: {len(normalized_audio)}")
-
     return normalized_audio
 
 def get_text_for_tts_infer(text, language_str, hps, device, symbol_to_id=None):
@@ -56,19 +44,12 @@ def get_text_for_tts_infer(text, language_str, hps, device, symbol_to_id=None):
         bert = get_bert(norm_text, word2ph, language_str, device)
         del word2ph
         assert bert.shape[-1] == len(phone), phone
+        
+        # For English, we use ja_bert format
+        ja_bert = bert
+        bert = torch.zeros(1024, len(phone))
 
-        if language_str == "ZH":
-            bert = bert
-            ja_bert = torch.zeros(768, len(phone))
-        elif language_str in ["JP", "EN", "ZH_MIX_EN", 'KR', 'SP', 'ES', 'FR', 'DE', 'RU']:
-            ja_bert = bert
-            bert = torch.zeros(1024, len(phone))
-        else:
-            raise NotImplementedError()
-
-    assert bert.shape[-1] == len(
-        phone
-    ), f"Bert seq len {bert.shape[-1]} != {len(phone)}"
+    assert bert.shape[-1] == len(phone), f"Bert seq len {bert.shape[-1]} != {len(phone)}"
 
     phone = torch.LongTensor(phone)
     tone = torch.LongTensor(tone)
@@ -80,14 +61,9 @@ def load_checkpoint(checkpoint_path, model, optimizer=None, skip_optimizer=False
     checkpoint_dict = torch.load(checkpoint_path, map_location="cpu")
     iteration = checkpoint_dict.get("iteration", 0)
     learning_rate = checkpoint_dict.get("learning_rate", 0.)
-    if (
-        optimizer is not None
-        and not skip_optimizer
-        and checkpoint_dict["optimizer"] is not None
-    ):
+    if optimizer is not None and not skip_optimizer and checkpoint_dict["optimizer"] is not None:
         optimizer.load_state_dict(checkpoint_dict["optimizer"])
     elif optimizer is None and not skip_optimizer:
-        # else:      Disable this line if Infer and resume checkpoint,then enable the line upper
         new_opt_dict = optimizer.state_dict()
         new_opt_dict_params = new_opt_dict["param_groups"][0]["params"]
         new_opt_dict["param_groups"] = checkpoint_dict["optimizer"]["param_groups"]
@@ -103,23 +79,15 @@ def load_checkpoint(checkpoint_path, model, optimizer=None, skip_optimizer=False
     new_state_dict = {}
     for k, v in state_dict.items():
         try:
-            # assert "emb_g" not in k
             new_state_dict[k] = saved_state_dict[k]
-            assert saved_state_dict[k].shape == v.shape, (
-                saved_state_dict[k].shape,
-                v.shape,
-            )
+            assert saved_state_dict[k].shape == v.shape, (saved_state_dict[k].shape, v.shape)
         except Exception as e:
             print(e)
-            # For upgrading from the old version
             if "ja_bert_proj" in k:
                 v = torch.zeros_like(v)
-                logger.warn(
-                    f"Seems you are using the old version of the model, the {k} is automatically set to zero for backward compatibility"
-                )
+                logger.warn(f"Seems you are using the old version of the model, the {k} is automatically set to zero for backward compatibility")
             else:
                 logger.error(f"{k} is not in the checkpoint")
-
             new_state_dict[k] = v
 
     if hasattr(model, "module"):
@@ -127,121 +95,26 @@ def load_checkpoint(checkpoint_path, model, optimizer=None, skip_optimizer=False
     else:
         model.load_state_dict(new_state_dict, strict=False)
 
-    logger.info(
-        "Loaded checkpoint '{}' (iteration {})".format(checkpoint_path, iteration)
-    )
-
+    logger.info("Loaded checkpoint '{}' (iteration {})".format(checkpoint_path, iteration))
     return model, optimizer, learning_rate, iteration
 
-
 def save_checkpoint(model, optimizer, learning_rate, iteration, checkpoint_path):
-    logger.info(
-        "Saving model and optimizer state at iteration {} to {}".format(
-            iteration, checkpoint_path
-        )
-    )
+    logger.info("Saving model and optimizer state at iteration {} to {}".format(
+        iteration, checkpoint_path))
     if hasattr(model, "module"):
         state_dict = model.module.state_dict()
     else:
         state_dict = model.state_dict()
-    torch.save(
-        {
-            "model": state_dict,
-            "iteration": iteration,
-            "optimizer": optimizer.state_dict(),
-            "learning_rate": learning_rate,
-        },
-        checkpoint_path,
-    )
-
-
-def summarize(
-    writer,
-    global_step,
-    scalars={},
-    histograms={},
-    images={},
-    audios={},
-    audio_sampling_rate=22050,
-):
-    for k, v in scalars.items():
-        writer.add_scalar(k, v, global_step)
-    for k, v in histograms.items():
-        writer.add_histogram(k, v, global_step)
-    for k, v in images.items():
-        writer.add_image(k, v, global_step, dataformats="HWC")
-    for k, v in audios.items():
-        writer.add_audio(k, v, global_step, audio_sampling_rate)
-
-
-def latest_checkpoint_path(dir_path, regex="G_*.pth"):
-    f_list = glob.glob(os.path.join(dir_path, regex))
-    f_list.sort(key=lambda f: int("".join(filter(str.isdigit, f))))
-    x = f_list[-1]
-    return x
-
-
-def plot_spectrogram_to_numpy(spectrogram):
-    global MATPLOTLIB_FLAG
-    if not MATPLOTLIB_FLAG:
-        import matplotlib
-
-        matplotlib.use("Agg")
-        MATPLOTLIB_FLAG = True
-        mpl_logger = logging.getLogger("matplotlib")
-        mpl_logger.setLevel(logging.WARNING)
-    import matplotlib.pylab as plt
-    import numpy as np
-
-    fig, ax = plt.subplots(figsize=(10, 2))
-    im = ax.imshow(spectrogram, aspect="auto", origin="lower", interpolation="none")
-    plt.colorbar(im, ax=ax)
-    plt.xlabel("Frames")
-    plt.ylabel("Channels")
-    plt.tight_layout()
-
-    fig.canvas.draw()
-    data = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep="")
-    data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-    plt.close()
-    return data
-
-
-def plot_alignment_to_numpy(alignment, info=None):
-    global MATPLOTLIB_FLAG
-    if not MATPLOTLIB_FLAG:
-        import matplotlib
-
-        matplotlib.use("Agg")
-        MATPLOTLIB_FLAG = True
-        mpl_logger = logging.getLogger("matplotlib")
-        mpl_logger.setLevel(logging.WARNING)
-    import matplotlib.pylab as plt
-    import numpy as np
-
-    fig, ax = plt.subplots(figsize=(6, 4))
-    im = ax.imshow(
-        alignment.transpose(), aspect="auto", origin="lower", interpolation="none"
-    )
-    fig.colorbar(im, ax=ax)
-    xlabel = "Decoder timestep"
-    if info is not None:
-        xlabel += "\n\n" + info
-    plt.xlabel(xlabel)
-    plt.ylabel("Encoder timestep")
-    plt.tight_layout()
-
-    fig.canvas.draw()
-    data = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep="")
-    data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-    plt.close()
-    return data
-
+    torch.save({
+        "model": state_dict,
+        "iteration": iteration,
+        "optimizer": optimizer.state_dict(),
+        "learning_rate": learning_rate,
+    }, checkpoint_path)
 
 def load_wav_to_torch(full_path):
     sampling_rate, data = read(full_path)
     return torch.FloatTensor(data.astype(np.float32)), sampling_rate
-
 
 def load_wav_to_torch_new(full_path):
     audio_norm, sampling_rate = torchaudio.load(full_path, frame_offset=0, num_frames=-1, normalize=True, channels_first=True)
@@ -252,12 +125,10 @@ def load_wav_to_torch_librosa(full_path, sr):
     audio_norm, sampling_rate = librosa.load(full_path, sr=sr, mono=True)
     return torch.FloatTensor(audio_norm.astype(np.float32)), sampling_rate
 
-
 def load_filepaths_and_text(filename, split="|"):
     with open(filename, encoding="utf-8") as f:
         filepaths_and_text = [line.strip().split(split) for line in f]
     return filepaths_and_text
-
 
 def get_hparams(init=True):
     parser = argparse.ArgumentParser()
@@ -266,18 +137,15 @@ def get_hparams(init=True):
         "--config",
         type=str,
         default="./configs/base.json",
-        help="JSON file for configuration",
+        help="JSON file for configuration"
     )
     parser.add_argument('--local_rank', type=int, default=0)
     parser.add_argument('--world-size', type=int, default=1)
     parser.add_argument('--port', type=int, default=10000)
     parser.add_argument("-m", "--model", type=str, required=True, help="Model name")
-    parser.add_argument('--pretrain_G', type=str, default=None,
-                            help='pretrain model')
-    parser.add_argument('--pretrain_D', type=str, default=None,
-                            help='pretrain model D')
-    parser.add_argument('--pretrain_dur', type=str, default=None,
-                            help='pretrain model duration')
+    parser.add_argument('--pretrain_G', type=str, default=None, help='pretrain model')
+    parser.add_argument('--pretrain_D', type=str, default=None, help='pretrain model D')
+    parser.add_argument('--pretrain_dur', type=str, default=None, help='pretrain model duration')
 
     args = parser.parse_args()
     model_dir = os.path.join("./logs", args.model)
@@ -303,7 +171,6 @@ def get_hparams(init=True):
     hparams.pretrain_dur = args.pretrain_dur
     hparams.port = args.port
     return hparams
-
 
 def clean_checkpoints(path_to_models="logs/44k/", n_ckpts_to_keep=2, sort_by_time=True):
     """Freeing up space by deleting saved ckpts

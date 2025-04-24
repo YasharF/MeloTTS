@@ -8,7 +8,7 @@ from melo import modules
 from melo import attentions
 
 from torch.nn import Conv1d, ConvTranspose1d, Conv2d
-from torch.nn.utils import weight_norm, remove_weight_norm, spectral_norm
+from torch.nn.utils import parametrizations, remove_weight_norm, spectral_norm
 
 from melo.commons import init_weights, get_padding
 import melo.monotonic_align as monotonic_align
@@ -491,7 +491,7 @@ class Generator(torch.nn.Module):
         self.ups = nn.ModuleList()
         for i, (u, k) in enumerate(zip(upsample_rates, upsample_kernel_sizes)):
             self.ups.append(
-                weight_norm(
+                parametrizations.weight_norm(
                     ConvTranspose1d(
                         upsample_initial_channel // (2**i),
                         upsample_initial_channel // (2 ** (i + 1)),
@@ -550,7 +550,7 @@ class DiscriminatorP(torch.nn.Module):
         super(DiscriminatorP, self).__init__()
         self.period = period
         self.use_spectral_norm = use_spectral_norm
-        norm_f = weight_norm if use_spectral_norm is False else spectral_norm
+        norm_f = parametrizations.weight_norm if use_spectral_norm is False else spectral_norm
         self.convs = nn.ModuleList(
             [
                 norm_f(
@@ -627,7 +627,7 @@ class DiscriminatorP(torch.nn.Module):
 class DiscriminatorS(torch.nn.Module):
     def __init__(self, use_spectral_norm=False):
         super(DiscriminatorS, self).__init__()
-        norm_f = weight_norm if use_spectral_norm is False else spectral_norm
+        norm_f = parametrizations.weight_norm if use_spectral_norm is False else spectral_norm
         self.convs = nn.ModuleList(
             [
                 norm_f(Conv1d(1, 16, 15, 1, padding=7)),
@@ -694,7 +694,7 @@ class ReferenceEncoder(nn.Module):
         K = len(ref_enc_filters)
         filters = [1] + ref_enc_filters
         convs = [
-            weight_norm(
+            parametrizations.weight_norm(
                 nn.Conv2d(
                     in_channels=filters[i],
                     out_channels=filters[i + 1],
